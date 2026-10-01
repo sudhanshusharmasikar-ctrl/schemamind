@@ -139,6 +139,8 @@ uvicorn app.api:app --reload   # terminal 1
 streamlit run ui/streamlit_app.py   # terminal 2
 ```
 
+Tested on macOS (Apple Silicon) with Python 3.14.
+
 Try: *how many orders*, *top 5 customers by spend*, *orders from Indore*, *revenue by category*, *cancelled orders*.
 
 ## License
