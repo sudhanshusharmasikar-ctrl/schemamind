@@ -132,8 +132,8 @@ On a 5-table database, expect these to be close, possibly with full schema sligh
 ## Setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+python3 -m venv .venv && source .venv/bin/activate   # Python 3.11 or newer
+pip install -r requirements.txt   # pinned, tested versions
 python -m app.seed_db          # creates the sample database
 uvicorn app.api:app --reload   # terminal 1
 streamlit run ui/streamlit_app.py   # terminal 2
