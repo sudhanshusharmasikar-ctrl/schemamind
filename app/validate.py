@@ -4,8 +4,8 @@ Validates generated SQL before it ever touches the database.
 A prompt instruction like "only write SELECT statements" is not a safety
 control -- it's a suggestion the model can ignore or get wrong under a
 confusing question. This module parses the SQL into an actual syntax tree
-and rejects anything that isn't a read. That's the difference between hoping
-and checking.
+and rejects anything that isn't a single read query. That's the difference
+between hoping and checking.
 """
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ from sqlglot import exp
 FORBIDDEN = (exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Create,
              exp.Alter, exp.TruncateTable)
 
+# A read query: a SELECT, or SELECTs combined with UNION / INTERSECT / EXCEPT.
+# (Older sqlglot versions have no SetOperation; there all three subclass Union.)
+READ_QUERY = (exp.Select, getattr(exp, "SetOperation", exp.Union))
+
 
 @dataclass
 class ValidationResult:
@@ -27,21 +31,29 @@ class ValidationResult:
 
 
 def validate(sql: str, dialect: str = "sqlite") -> ValidationResult:
-    sql = sql.strip().rstrip(";")
-    if not sql:
+    if not sql.strip().strip(";").strip():
         return ValidationResult(False, "Empty query.")
 
     try:
-        parsed = sqlglot.parse_one(sql, dialect=dialect)
+        # parse() returns every statement in the string. parse_one() looked
+        # only at the first one in older sqlglot versions, so a hidden
+        # "...; DROP TABLE customers" behind a SELECT was never checked.
+        statements = [s for s in sqlglot.parse(sql, dialect=dialect) if s is not None]
     except Exception as e:
         return ValidationResult(False, f"SQL does not parse: {e}")
+
+    if len(statements) != 1:
+        return ValidationResult(
+            False, f"Exactly one statement is allowed, got {len(statements)}."
+        )
+    parsed = statements[0]
 
     if isinstance(parsed, FORBIDDEN):
         return ValidationResult(
             False, f"Query type {type(parsed).__name__} is not allowed. Read-only access only."
         )
 
-    if not isinstance(parsed, (exp.Select, exp.Union)):
+    if not isinstance(parsed, READ_QUERY):
         return ValidationResult(
             False, f"Only SELECT queries are allowed, got {type(parsed).__name__}."
         )

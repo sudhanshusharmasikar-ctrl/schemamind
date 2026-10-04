@@ -43,23 +43,31 @@ error? ──yes──► Repair loop: real DB error goes back to the model,
 result + the SQL that produced it, always shown together
 ```
 
-### Two independent safety layers, tested
+### Safety layers, tested
 
-The AST validator (`app/validate.py`) rejects `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, and multi-statement injection attempts (`SELECT ...; DROP TABLE ...`), including when a write is nested inside a subquery. Verified:
-
-```
-'DROP TABLE customers;'                              -> blocked
-'DELETE FROM orders;'                                -> blocked
-'SELECT * FROM customers; DROP TABLE customers;'     -> blocked
-```
-
-Independently, the database connection itself is opened with `mode=ro`. If a write ever got past the validator, SQLite refuses it at the file level:
+**1. The validator** (`app/validate.py`) parses the SQL with sqlglot and allows exactly one read query: a `SELECT`, or `SELECT`s combined with `UNION`, `INTERSECT` or `EXCEPT`. Everything else is refused, including a write hidden behind a read or inside a CTE:
 
 ```
-DELETE FROM orders;  -> attempt to write a readonly database
+SELECT * FROM customers; DROP TABLE customers;  -> Exactly one statement is allowed, got 2.
+DELETE FROM orders                              -> Query type Delete is not allowed. Read-only access only.
+PRAGMA writable_schema = 1                      -> Only SELECT queries are allowed, got Pragma.
 ```
 
-Two layers because a prompt instruction is not a security control, and neither is a single point of enforcement.
+It counts the statements itself (`sqlglot.parse`), so it doesn't depend on how a particular sqlglot version treats a second statement; its tests pass on sqlglot 26 through 30.
+
+**2. The connection** is opened with `mode=ro`. If a write ever got past the validator, SQLite refuses it at the file level:
+
+```
+DELETE FROM orders  -> attempt to write a readonly database
+```
+
+**3. Limits.** A read can still hurt: a recursive query that never ends, or a cross join with hundreds of millions of rows, would tie up the server. The executor stops any query after 5 seconds (`SCHEMAMIND_QUERY_TIMEOUT`) using SQLite's progress handler, because `connect(timeout=...)` only limits waiting for a locked file. It also returns at most 200 rows.
+
+```
+WITH RECURSIVE n(x) AS (...) SELECT COUNT(*) FROM n  -> Query stopped: it ran longer than the 5-second limit.
+```
+
+Several layers, because a prompt instruction is not a security control, and neither is a single point of enforcement.
 
 ### Schema retrieval instead of schema dumping
 
@@ -77,8 +85,10 @@ Table descriptions (columns, types, foreign keys, two sample rows) are embedded 
 |---|---|
 | Database seeds correctly (150 orders, 40 customers, 5 tables) | Tested, works |
 | Schema introspection reads columns, types, foreign keys correctly | Tested, works |
-| Validator blocks DROP / DELETE / UPDATE / INSERT / injection | Tested, works |
-| Read-only DB connection blocks writes independently | Tested, works |
+| Validator allows one read query and blocks writes, hidden second statements, PRAGMA, ATTACH, VACUUM | Tested (`tests/test_validate.py`) |
+| Read-only DB connection blocks writes independently | Tested (`tests/test_executor.py`) |
+| Runaway queries stop at the time limit; results are capped at 200 rows | Tested (`tests/test_executor.py`) |
+| An unsafe query from the generator never reaches the data, end to end | Tested (`tests/test_agent_safety.py`) |
 | Template mode generates correct SQL for 5 question shapes | Tested, works |
 | Full pipeline: question → SQL → validated → executed → correct rows | Tested, works |
 | Real LLM (mistral mode) text-to-SQL accuracy | Needs your API key |
@@ -142,6 +152,15 @@ streamlit run ui/streamlit_app.py   # terminal 2
 Tested on macOS (Apple Silicon) with Python 3.14.
 
 Try: *how many orders*, *top 5 customers by spend*, *orders from Indore*, *revenue by category*, *cancelled orders*.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The tests build their own copy of the sample database in a temporary folder and never load the embedding model, so they run offline in a few seconds. They cover the validator (one read query only), the executor (read-only connection, time limit, row limit) and an end-to-end check that an injected `DROP TABLE` is refused while the data stays intact.
 
 ## License
 

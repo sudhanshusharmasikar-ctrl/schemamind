@@ -3,6 +3,6 @@ uvicorn[standard]==0.54.0
 pydantic==2.13.5
 sentence-transformers==6.1.0
 numpy==2.4.6
-sqlglot==30.21.0  # must stay >= 29: older versions skip a second statement after ";"
+sqlglot==30.21.0
 streamlit==1.64.0
 requests==2.34.2
