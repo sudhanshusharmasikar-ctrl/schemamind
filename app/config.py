@@ -5,7 +5,14 @@ value lives here with a comment on why, so you can defend each choice.
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).resolve().parent.parent
+
+# Read settings from a .env file in the project folder, if there is one
+# (cp .env.example .env). A variable already set in your shell wins over the
+# file, so you can still change a setting for a single command.
+load_dotenv(ROOT / ".env")
 
 DB_PATH = Path(os.getenv("SCHEMAMIND_DB", ROOT / "data" / "shop.db"))
 STORAGE_DIR = Path(os.getenv("SCHEMAMIND_STORAGE", ROOT / "storage"))
