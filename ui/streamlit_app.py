@@ -14,18 +14,24 @@ st.caption("Ask questions in plain English about the sample shop database. "
            "The SQL it ran is always shown — never trust an answer you can't see the query for.")
 
 with st.sidebar:
+    # Ask the server first: the mode picked below is sent with every question,
+    # so it starts at the server's SCHEMAMIND_GEN_MODE instead of overriding it.
+    try:
+        h = requests.get(f"{API}/health", timeout=5).json()
+    except Exception:
+        h = None
     st.subheader("Settings")
     top_k = st.slider("Tables to retrieve", 1, 5, 3)
     use_full = st.checkbox("Use full schema instead of retrieval", value=False)
-    mode = st.radio("Generation mode", ["template", "mistral"], index=0,
-                     help="template needs no API key but only handles a few "
-                          "known question shapes. mistral is real text-to-SQL.")
+    mode = st.radio("Generation mode", ["template", "mistral"],
+                    index=1 if h and h.get("gen_mode") == "mistral" else 0,
+                    help="template needs no API key but only handles a few "
+                         "known question shapes. mistral is real text-to-SQL.")
     st.divider()
-    try:
-        h = requests.get(f"{API}/health", timeout=5).json()
+    if h:
         st.success("API up")
         st.write("Tables:", ", ".join(h.get("tables", [])))
-    except Exception:
+    else:
         st.error("API unreachable. Start it with `uvicorn app.api:app`.")
 
 st.info("Try: *how many orders*, *top 5 customers by spend*, "
@@ -41,10 +47,12 @@ if st.button("Ask", type="primary") and question:
                   "use_full_schema": use_full, "mode": mode},
             timeout=60,
         )
-        r.raise_for_status()
         data = r.json()
     except Exception as e:
         st.error(f"Request failed: {e}")
+        st.stop()
+    if not r.ok:  # the API says why, e.g. a missing Mistral key
+        st.error(f"Request failed ({r.status_code}): {data.get('detail', data)}")
         st.stop()
 
     c1, c2, c3 = st.columns(3)

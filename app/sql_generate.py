@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import re
 import textwrap
+import time
 
 import requests
 
-from .config import MISTRAL_API_KEY, MISTRAL_MODEL
+from .config import LLM_MIN_INTERVAL, LLM_RETRIES, MISTRAL_API_KEY, MISTRAL_MODEL
 from .schema_introspect import TableInfo
 
 SYSTEM_PROMPT = textwrap.dedent(
@@ -38,29 +39,75 @@ SYSTEM_PROMPT = textwrap.dedent(
 )
 
 
-def _mistral_generate(question: str, schema_text: str, extra_note: str = "") -> str:
+MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
+
+
+class LLMError(RuntimeError):
+    """The LLM couldn't be reached, or refused the request."""
+
+
+class LLMAuthError(LLMError):
+    """No API key, or a rejected one: retrying won't help."""
+
+
+_last_call = 0.0  # time.monotonic() when the last request was sent
+
+
+def _post(payload: dict) -> dict:
+    """POST to Mistral, keeping requests LLM_MIN_INTERVAL apart and retrying a
+    rate limit (429), a server error (5xx) or a dropped connection with a
+    growing wait (1, 2, 4, 8 s, or what the Retry-After header asks for)."""
+    global _last_call
     if not MISTRAL_API_KEY:
-        raise RuntimeError("SCHEMAMIND_GEN_MODE=mistral but MISTRAL_API_KEY is unset.")
+        raise LLMAuthError("MISTRAL_API_KEY is not set. Put it in .env (see README).")
+    problem = ""
+    for attempt in range(LLM_RETRIES + 1):
+        wait = _last_call + LLM_MIN_INTERVAL - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _last_call = time.monotonic()
+        retry_after = ""
+        try:
+            resp = requests.post(
+                MISTRAL_URL,
+                headers={"Authorization": f"Bearer {MISTRAL_API_KEY}",
+                         "Content-Type": "application/json"},
+                json=payload,
+                timeout=60,
+            )
+        except requests.RequestException as e:
+            problem = f"could not reach Mistral ({e.__class__.__name__})"
+        else:
+            if resp.status_code in (401, 403):
+                raise LLMAuthError(f"Mistral rejected the API key ({resp.status_code}). "
+                                   "Check MISTRAL_API_KEY in .env.")
+            if resp.status_code == 429 or resp.status_code >= 500:
+                problem = f"Mistral answered {resp.status_code}"
+                retry_after = resp.headers.get("Retry-After", "")
+            elif resp.status_code >= 400:  # a mistake in the request: retrying won't help
+                raise LLMError(f"Mistral refused the request ({resp.status_code}): {resp.text[:200]}")
+            else:
+                return resp.json()
+        if attempt < LLM_RETRIES:
+            time.sleep(min(float(retry_after) if retry_after.isdigit() else 2 ** attempt, 30))
+    raise LLMError(f"{problem}, still failing after {LLM_RETRIES + 1} tries")
+
+
+def _mistral_generate(question: str, schema_text: str, extra_note: str = "") -> str:
     user_content = f"Schema:\n{schema_text}\n\nQuestion: {question}"
     if extra_note:
         user_content += f"\n\n{extra_note}"
 
-    resp = requests.post(
-        "https://api.mistral.ai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"},
-        json={
-            "model": MISTRAL_MODEL,
-            "max_tokens": 300,
-            "temperature": 0.0,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-        },
-        timeout=60,
-    )
-    resp.raise_for_status()
-    text = resp.json()["choices"][0]["message"]["content"].strip()
+    reply = _post({
+        "model": MISTRAL_MODEL,
+        "max_tokens": 300,
+        "temperature": 0.0,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+    })
+    text = reply["choices"][0]["message"]["content"].strip()
     # strip markdown fences if the model adds them despite instructions
     text = re.sub(r"^```(sql)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
     return text.strip()

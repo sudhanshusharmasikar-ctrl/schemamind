@@ -33,6 +33,11 @@ TOP_K_TABLES = int(os.getenv("SCHEMAMIND_TOP_K_TABLES", 3))
 GEN_MODE = os.getenv("SCHEMAMIND_GEN_MODE", "template")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+# Mistral's free plan limits how many requests you may send per second, so
+# calls are spaced at least this far apart. A "too many requests" reply (429)
+# or a temporary server error is retried, waiting longer each time.
+LLM_MIN_INTERVAL = float(os.getenv("SCHEMAMIND_LLM_MIN_INTERVAL", 1.1))
+LLM_RETRIES = int(os.getenv("SCHEMAMIND_LLM_RETRIES", 4))
 
 MAX_REPAIR_ATTEMPTS = int(os.getenv("SCHEMAMIND_MAX_REPAIR", 2))
 # A query on this database takes milliseconds; one still running after this
