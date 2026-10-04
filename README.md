@@ -75,7 +75,9 @@ Table descriptions (columns, types, foreign keys, two sample rows) are embedded 
 
 ### Why template mode exists
 
-`SCHEMAMIND_GEN_MODE=template` pattern-matches a question against five known shapes (count, top-N by spend, filter by city, group-by revenue, filter by status) and fills in SQL. It needs no API key and always runs, which is what let every claim in this README be tested without a paid key. **It is not text-to-SQL** — it only knows the shapes it's given. `SCHEMAMIND_GEN_MODE=mistral` is the real thing: an LLM writes novel SQL from the retrieved schema. Say this distinction out loud if asked; it's the honest answer.
+`SCHEMAMIND_GEN_MODE=template` matches a question against a fixed list of shapes (counts, overall or by city or status; top-N customers by spend or by number of orders; orders from a city; revenue by category or city; orders with a given status) and fills in SQL. It needs no API key and always runs, which is what let every claim in this README be tested without a paid key. **It is not text-to-SQL** — it only knows the shapes it's given. `SCHEMAMIND_GEN_MODE=mistral` is the real thing: an LLM writes novel SQL from the retrieved schema. Say this distinction out loud if asked; it's the honest answer.
+
+The whole question has to match a shape. A question with words left over, like *orders in the last month*, is refused rather than half-answered: half-matching is how this mode used to give valid but wrong answers, such as 150 for *how many orders from Pune?* (all orders) when the answer is 22. Both revenue questions use one definition of revenue, the value of items in orders that weren't cancelled, so they agree with each other and with total payments.
 
 ---
 
@@ -89,7 +91,7 @@ Table descriptions (columns, types, foreign keys, two sample rows) are embedded 
 | Read-only DB connection blocks writes independently | Tested (`tests/test_executor.py`) |
 | Runaway queries stop at the time limit; results are capped at 200 rows | Tested (`tests/test_executor.py`) |
 | An unsafe query from the generator never reaches the data, end to end | Tested (`tests/test_agent_safety.py`) |
-| Template mode generates correct SQL for 5 question shapes | Tested, works |
+| Template mode answers its question shapes correctly and refuses partial matches | Tested (`tests/test_templates.py`) |
 | Full pipeline: question → SQL → validated → executed → correct rows | Tested, works |
 | Real LLM (mistral mode) text-to-SQL accuracy | Needs your API key |
 | Retrieved-schema vs full-schema accuracy comparison | Needs your API key + your question set |
@@ -136,7 +138,7 @@ On a 5-table database, expect these to be close, possibly with full schema sligh
 ## Known limitations
 
 - SQLite only.
-- Template mode covers 5 fixed question shapes; anything else returns "could not generate a query" in that mode.
+- Template mode covers a fixed list of question shapes; anything else returns "could not generate a query" in that mode.
 - No handling of multi-turn follow-up questions.
 
 ## Setup
@@ -151,7 +153,7 @@ streamlit run ui/streamlit_app.py   # terminal 2
 
 Tested on macOS (Apple Silicon) with Python 3.14.
 
-Try: *how many orders*, *top 5 customers by spend*, *orders from Indore*, *revenue by category*, *cancelled orders*.
+Try: *how many orders*, *how many orders from Pune*, *top 5 customers by spend*, *orders from Indore*, *revenue by category*, *cancelled orders*.
 
 ## Tests
 
@@ -160,7 +162,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The tests build their own copy of the sample database in a temporary folder and never load the embedding model, so they run offline in a few seconds. They cover the validator (one read query only), the executor (read-only connection, time limit, row limit) and an end-to-end check that an injected `DROP TABLE` is refused while the data stays intact.
+The tests build their own copy of the sample database in a temporary folder and never load the embedding model, so they run offline in a few seconds. They cover the validator (one read query only), the executor (read-only connection, time limit, row limit), template mode (each question shape gives the right answer; questions it only partly understands are refused) and an end-to-end check that an injected `DROP TABLE` is refused while the data stays intact.
 
 ## License
 
