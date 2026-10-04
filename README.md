@@ -4,7 +4,7 @@
 
 A text-to-SQL agent that answers plain-English questions against a database, retrieves only the tables relevant to the question instead of dumping the whole schema into the prompt, and refuses to run anything that isn't a read.
 
-> **Status: core pipeline built and tested.** Schema introspection, retrieval, validation and execution all run correctly against the included sample database (verified below). Real LLM-based generation and the full-vs-retrieved-schema benchmark need your own API key and your own question set — see Evaluation.
+> **Status: core pipeline built and tested; evaluation ready to run.** Schema introspection, retrieval, validation and execution all run correctly against the included sample database (verified below). The evaluation (24 hand-written questions, retrieved schema vs full schema) is written and tested; its numbers come from a run with a free Mistral API key — see Evaluation.
 
 ---
 
@@ -95,8 +95,12 @@ The whole question has to match a shape. A question with words left over, like *
 | An unsafe query from the generator never reaches the data, end to end | Tested (`tests/test_agent_safety.py`) |
 | Template mode answers its question shapes correctly and refuses partial matches | Tested (`tests/test_templates.py`) |
 | Full pipeline: question → SQL → validated → executed → correct rows | Tested, works |
-| Real LLM (mistral mode) text-to-SQL accuracy | Needs your API key |
-| Retrieved-schema vs full-schema accuracy comparison | Needs your API key + your question set |
+| The Mistral client spaces its requests, retries rate limits and server errors, and stops at once on a missing or rejected key | Tested with a fake server (`tests/test_mistral_client.py`) |
+| The evaluation scores answers correctly, and every gold query is safe, runs and returns rows | Tested (`tests/test_eval.py`) |
+| Settings load from `.env`; a variable set in the shell wins | Tested (`tests/test_config.py`) |
+| The web page starts in the server's generation mode and shows why a request failed | Tested (`tests/test_ui.py`) |
+| Real LLM (mistral mode) text-to-SQL accuracy | Script and questions ready; needs a run with your key |
+| Retrieved-schema vs full-schema accuracy comparison | Script and questions ready; needs a run with your key |
 
 ## Planned features
 
@@ -109,8 +113,8 @@ The whole question has to match a shape. A question with words left over, like *
 - [x] Bounded repair loop on execution/validation failure
 - [x] FastAPI backend
 - [x] Streamlit UI
-- [ ] Hand-written eval set with gold SQL
-- [ ] Retrieved-vs-full-schema accuracy benchmark (needs the above)
+- [x] Hand-written eval set with gold SQL
+- [ ] Retrieved-vs-full-schema accuracy benchmark (script ready, needs a run with a Mistral key)
 - [ ] Support for a second SQL dialect
 
 ## Stack
@@ -119,21 +123,55 @@ Python · FastAPI · SQLite · sqlglot (AST parsing) · sentence-transformers ·
 
 ## Evaluation
 
-The benchmark that matters — retrieved schema vs full schema — needs `SCHEMAMIND_GEN_MODE=mistral` and a written question set with gold SQL, because template mode is deterministic pattern matching and would score identically either way.
+`eval/questions.jsonl` holds 24 hand-written questions about the sample shop database:
+
+- **20 answerable**, each with gold SQL, the query you'd accept as correct. They range from one table (*How many customers are there?*) to four joined tables with two filters (*How many Laptops were bought by customers in Indore, in orders that were not cancelled?*). Some check classic mistakes, such as counting order lines when the question asks for orders: 18 lines, but 17 orders, contain a delivered Monitor.
+- **4 unanswerable**: they ask for data the database doesn't hold (a customer's email, employees, profit, stock). The right answer is to refuse; the prompt tells the model to reply `CANNOT_ANSWER`.
+
+`python -m eval.run_eval` asks every question twice with Mistral: once with only the retrieved tables in the prompt (how SchemaMind normally runs) and once with the full schema.
+
+**How an answer is scored.** An answer is correct when its rows match the gold query's rows ("execution accuracy"); the SQL text may differ, since the same question can be answered by many queries. Rows can come in any order, numbers are compared to 2 decimal places (2705800 and 2705800.0 are the same answer, and an average shouldn't fail on rounding), and extra columns are allowed: an answer that shows a customer's id next to the name the question asked for still answers it. A missing column, a missing or extra row, or a different value is wrong. Before asking anything, the script checks the gold SQL itself: each query must pass the validator, run, and return rows. `tests/test_eval.py` repeats that check on every push.
+
+The report has one column per schema:
+
+| Row | What it counts |
+|---|---|
+| Correct answers | execution accuracy over the 20 answerable questions |
+| Ran, but returned the wrong rows | the dangerous kind: a valid query that answers a different question |
+| Failed to run after all repairs | SQL that still failed after the repair loop, or Mistral unreachable |
+| Answerable, but refused | the model replied `CANNOT_ANSWER` to a question it could answer |
+| Correct only after a repair | the repair loop turned a failing query into a right one |
+| Unanswerable questions refused | out of the 4 |
+| Every needed table in the prompt | retrieval recall: whether the 3 retrieved tables included every table the gold SQL reads (always 20 of 20 with the full schema) |
+| Seconds per question | median and 95th percentile, including any wait for Mistral's rate limit |
+
+After the table it lists every miss with the SQL the model wrote, then prints a resume line built from the counts.
+
+### Running it
+
+Put your Mistral key in `.env` (see Setup), then:
 
 ```bash
-cp eval/questions.example.jsonl eval/questions.jsonl   # then write your own, 15-20 questions
-export SCHEMAMIND_GEN_MODE=mistral
-export MISTRAL_API_KEY=your_key
-python -m eval.run_eval
+python -m eval.run_eval --mode template   # free dry run of the whole script, no key needed
+python -m eval.run_eval                   # the evaluation, with Mistral
 ```
 
-Results table, to be filled from that run:
+The dry run only shows that everything works end to end: template mode knows a few fixed question shapes, so it answers 1 of the 20 and refuses the rest. The real run sends about 50 requests and takes a couple of minutes.
+
+Mistral's free plan limits how many requests you can send per second. The client sends at most one request every 1.1 seconds (`SCHEMAMIND_LLM_MIN_INTERVAL`) and retries a rate-limit reply (429), a server error or a dropped connection up to 4 times (`SCHEMAMIND_LLM_RETRIES`), waiting 1, 2, 4 and 8 seconds, or as long as the server's `Retry-After` header asks. A missing or rejected key stops the run at once with a message saying so, instead of failing all 48 requests one by one. `tests/test_mistral_client.py` checks all of this with a fake server and a fake clock, so the tests send nothing and never wait.
+
+### Results
+
+To be filled in from that run:
 
 | Metric | Retrieved schema | Full schema |
 |---|---|---|
-| Execution accuracy | — | — |
+| Correct answers (of 20) | — | — |
+| Ran, but returned the wrong rows | — | — |
 | Failed to run | — | — |
+| Unanswerable questions refused (of 4) | — | — |
+| Every needed table in the prompt (of 20) | — | 20 |
+| Seconds per question (median) | — | — |
 
 On a 5-table database, expect these to be close, possibly with full schema slightly ahead — that would be the honest finding. The technique is what's being demonstrated; it's built for warehouses with hundreds of tables, where dumping the full schema stops being possible at all.
 
@@ -142,6 +180,7 @@ On a 5-table database, expect these to be close, possibly with full schema sligh
 - SQLite only.
 - Template mode covers a fixed list of question shapes; anything else returns "could not generate a query" in that mode.
 - No handling of multi-turn follow-up questions.
+- The evaluation set is small (24 questions) and was written by hand for the sample database, so it measures this setup, not text-to-SQL in general.
 
 ## Setup
 
@@ -149,6 +188,7 @@ On a 5-table database, expect these to be close, possibly with full schema sligh
 python3 -m venv .venv && source .venv/bin/activate   # Python 3.11 or newer
 pip install -r requirements.txt   # pinned, tested versions
 python -m app.seed_db          # creates the sample database
+cp .env.example .env           # settings; the Mistral key goes here
 uvicorn app.api:app --reload   # terminal 1
 streamlit run ui/streamlit_app.py   # terminal 2
 ```
@@ -157,6 +197,8 @@ Tested on macOS (Apple Silicon) with Python 3.14.
 
 Try: *how many orders*, *how many orders from Pune*, *top 5 customers by spend*, *orders from Indore*, *revenue by category*, *cancelled orders*.
 
+For mistral mode, create a free API key at [console.mistral.ai](https://console.mistral.ai), uncomment `MISTRAL_API_KEY=` in `.env` and paste the key after the `=`. Set `SCHEMAMIND_GEN_MODE=mistral` as well if you want the app to start in that mode; you can also switch in the sidebar. `.env` is in `.gitignore`, so the key is never committed, and a variable set in your shell wins over the file.
+
 ## Tests
 
 ```bash
@@ -164,7 +206,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The tests build their own copy of the sample database in a temporary folder and never load the embedding model, so they run offline in a few seconds. They cover the validator (one read query only), the executor (read-only connection, time limit, row limit), template mode (each question shape gives the right answer; questions it only partly understands are refused) and an end-to-end check that an injected `DROP TABLE` is refused while the data stays intact.
+The tests build their own copy of the sample database in a temporary folder, never load the embedding model and never call Mistral, so they run offline in seconds. They cover the validator (one read query only), the executor (read-only connection, time limit, row limit), template mode (each question shape gives the right answer; questions it only partly understands are refused), an end-to-end check that an injected `DROP TABLE` is refused while the data stays intact, the Mistral client (pacing, retries, key errors) against a fake server, the evaluation's scoring and gold SQL, settings from `.env`, and the web page.
 
 GitHub Actions runs the same tests after every push, on Python 3.11 and 3.14 (see `.github/workflows/tests.yml`). The badge at the top shows the result for `main`.
 
