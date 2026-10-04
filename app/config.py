@@ -28,7 +28,10 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
 
 MAX_REPAIR_ATTEMPTS = int(os.getenv("SCHEMAMIND_MAX_REPAIR", 2))
-QUERY_TIMEOUT_SECONDS = 10
+# A query on this database takes milliseconds; one still running after this
+# many seconds is a runaway (a never-ending recursive CTE, a huge cross join)
+# and executor.py stops it.
+QUERY_TIMEOUT_SECONDS = float(os.getenv("SCHEMAMIND_QUERY_TIMEOUT", 5))
 MAX_RESULT_ROWS = 200  # a runaway SELECT should not flood the response
 
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
