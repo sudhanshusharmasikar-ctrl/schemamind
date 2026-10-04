@@ -1,5 +1,7 @@
 # SchemaMind
 
+[![tests](https://github.com/sudhanshusharmasikar-ctrl/schemamind/actions/workflows/tests.yml/badge.svg)](https://github.com/sudhanshusharmasikar-ctrl/schemamind/actions/workflows/tests.yml)
+
 A text-to-SQL agent that answers plain-English questions against a database, retrieves only the tables relevant to the question instead of dumping the whole schema into the prompt, and refuses to run anything that isn't a read.
 
 > **Status: core pipeline built and tested.** Schema introspection, retrieval, validation and execution all run correctly against the included sample database (verified below). Real LLM-based generation and the full-vs-retrieved-schema benchmark need your own API key and your own question set — see Evaluation.
@@ -163,6 +165,8 @@ pytest
 ```
 
 The tests build their own copy of the sample database in a temporary folder and never load the embedding model, so they run offline in a few seconds. They cover the validator (one read query only), the executor (read-only connection, time limit, row limit), template mode (each question shape gives the right answer; questions it only partly understands are refused) and an end-to-end check that an injected `DROP TABLE` is refused while the data stays intact.
+
+GitHub Actions runs the same tests after every push, on Python 3.11 and 3.14 (see `.github/workflows/tests.yml`). The badge at the top shows the result for `main`.
 
 ## License
 
