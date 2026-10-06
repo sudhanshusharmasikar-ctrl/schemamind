@@ -21,6 +21,16 @@ SCHEMA_INDEX_PATH = STORAGE_DIR / "schema_index.json"
 # ---------- schema retrieval ----------
 EMBED_MODEL = os.getenv("SCHEMAMIND_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 TOP_K_TABLES = int(os.getenv("SCHEMAMIND_TOP_K_TABLES", 3))
+# Also give the model the tables needed to read and join the retrieved ones:
+# the tables their foreign keys point to (an order_items row names its
+# product only by id), and a table that links two retrieved ones. Without
+# them the evaluation's model guessed ids and dropped conditions. 0 = off.
+JOIN_TABLES = os.getenv("SCHEMAMIND_JOIN_TABLES", "1") != "0"
+# A text column with at most this many distinct (short) values lists them
+# all in the schema the model sees. Two sample rows aren't enough: the model
+# read them as the complete list and refused questions about UPI payments
+# when the samples showed only card and cod. 0 = off.
+VALUE_LIST_MAX = int(os.getenv("SCHEMAMIND_VALUE_LIST_MAX", 10))
 
 # ---------- generation ----------
 # "template" -> pattern-matches the question against a small set of known

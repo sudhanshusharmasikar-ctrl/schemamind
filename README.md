@@ -73,7 +73,12 @@ Several layers, because a prompt instruction is not a security control, and neit
 
 ### Schema retrieval instead of schema dumping
 
-Table descriptions (columns, types, foreign keys, two sample rows) are embedded once with MiniLM. At query time the top-k most relevant tables go into the prompt. Sample rows matter here — they tell the model a `status` column contains the string `'shipped'`, not an integer code, which a bare column list can't.
+Table descriptions (columns, types, foreign keys, two sample rows) are embedded once with MiniLM. At query time the top-k most relevant tables go into the prompt, together with the tables needed to read and join them:
+
+- every table a retrieved table's foreign keys point to, because an `order_items` row names its product only by id;
+- a table that links two retrieved ones, as `order_items` links `orders` to `products`.
+
+A short text column also lists every value it holds, for example `method (TEXT, one of: 'card', 'cod', 'upi')`. Two sample rows show what a row looks like, but the model takes them as the complete list of values, and a listed value also helps retrieval match a question that names it. Both changes came out of the evaluation below; `SCHEMAMIND_JOIN_TABLES=0` and `SCHEMAMIND_VALUE_LIST_MAX=0` turn them off.
 
 ### Why template mode exists
 
@@ -93,6 +98,8 @@ The whole question has to match a shape. A question with words left over, like *
 | Read-only DB connection blocks writes independently | Tested (`tests/test_executor.py`) |
 | Runaway queries stop at the time limit; results are capped at 200 rows | Tested (`tests/test_executor.py`) |
 | An unsafe query from the generator never reaches the data, end to end | Tested (`tests/test_agent_safety.py`) |
+| Short text columns list their values; long lists, free text, numbers, dates and ids don't | Tested (`tests/test_schema.py`) |
+| Retrieval adds the tables needed to read and join the retrieved ones | Tested (`tests/test_schema.py`) |
 | Template mode answers its question shapes correctly and refuses partial matches | Tested (`tests/test_templates.py`) |
 | Full pipeline: question → SQL → validated → executed → correct rows | Tested, works |
 | The Mistral client spaces its requests, retries rate limits and server errors, and stops at once on a missing or rejected key | Tested with a fake server (`tests/test_mistral_client.py`) |
@@ -115,7 +122,8 @@ The whole question has to match a shape. A question with words left over, like *
 - [x] Streamlit UI
 - [x] Hand-written eval set with gold SQL
 - [x] Retrieved-vs-full-schema accuracy benchmark
-- [ ] Distinct values of short text columns in the prompt, and foreign-key expansion of retrieved tables (the two causes the benchmark found)
+- [x] Value lists for short text columns, and join tables for retrieval (fixes for the two causes the benchmark found)
+- [ ] Re-run the benchmark with those fixes
 - [ ] Support for a second SQL dialect
 
 ## Stack
@@ -144,7 +152,8 @@ The report has one column per schema:
 | Answerable, but refused | the model replied `CANNOT_ANSWER` to a question it could answer |
 | Correct only after a repair | the repair loop turned a failing query into a right one |
 | Unanswerable questions refused | out of the 4 |
-| Every needed table in the prompt | retrieval recall: whether the 3 retrieved tables included every table the gold SQL reads (always 20 of 20 with the full schema) |
+| Every needed table in the prompt | retrieval recall: whether the retrieved tables included every table the gold SQL reads (always 20 of 20 with the full schema) |
+| Tables in the prompt (average) | what that recall costs: the prompt grows with every table added (always 5 with the full schema) |
 | Seconds per question | median and 95th percentile, including any wait for Mistral's rate limit |
 
 After the table it lists every miss with the SQL the model wrote, then prints a resume line built from the counts.
@@ -163,6 +172,8 @@ The dry run only shows that everything works end to end: template mode knows a f
 Mistral's free plan limits how many requests you can send per second. The client sends at most one request every 1.1 seconds (`SCHEMAMIND_LLM_MIN_INTERVAL`) and retries a rate-limit reply (429), a server error or a dropped connection up to 4 times (`SCHEMAMIND_LLM_RETRIES`), waiting 1, 2, 4 and 8 seconds, or as long as the server's `Retry-After` header asks. A missing or rejected key stops the run at once with a message saying so, instead of failing all 48 requests one by one. So does Mistral giving no answer to 3 questions in a row: a 429 that outlasts every retry isn't the per-second limit but something that fails every question, such as a used-up limit or a model with no free capacity left, and the message quotes Mistral's reason. The Limits page of Mistral's admin console shows your plan's limits. A run in which any question got no answer prints no resume line. `tests/test_mistral_client.py` checks the client with a fake server and a fake clock, so the tests send nothing and never wait, and `tests/test_eval.py` checks the early stop.
 
 ### Results
+
+These numbers come from before the two fixes at the end of this section, which are now in place; the numbers after them come from the next run.
 
 Measured on 6 October 2026 with `codestral-2508`, Mistral's model for code, on the free plan (on that plan every request to `mistral-small-latest` was refused as over the rate limit): temperature 0, the 3 most relevant tables retrieved, at most 2 repairs.
 
@@ -193,7 +204,7 @@ The other misses:
 - *Who are the top 3 customers by total amount paid?* (retrieved schema) It returned customer ids 7, 26 and 15 with their totals: the right customers in the right order, but ids where the question asks who. The scoring rule counts it as wrong; counted as right, retrieval would score 15 of 20.
 - *How much profit did the shop make on Laptops?* (full schema) The database records no costs, so the right answer is to refuse. The model treated the list price as a cost and reported a profit of 0.
 
-Next, two fixes measured on the same 24 questions: show the distinct values of short text columns (status, payment method, category, product name, city) instead of relying on two sample rows, and add the tables a retrieved table's foreign keys point to, so that `order_items` brings `products` and `orders` with it.
+The two fixes, to be measured on the same 24 questions: list every value of a short text column (status, payment method, category, product name, city) instead of relying on two sample rows, and add the tables needed to read and join the retrieved ones, so that `order_items` brings `products` and `orders` with it (see Schema retrieval above).
 
 ## Known limitations
 
@@ -226,7 +237,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The tests build their own copy of the sample database in a temporary folder, never load the embedding model and never call Mistral, so they run offline in seconds. They cover the validator (one read query only), the executor (read-only connection, time limit, row limit), template mode (each question shape gives the right answer; questions it only partly understands are refused), an end-to-end check that an injected `DROP TABLE` is refused while the data stays intact, the Mistral client (pacing, retries, key errors) against a fake server, the evaluation's scoring and gold SQL, settings from `.env`, and the web page.
+The tests build their own copy of the sample database in a temporary folder, never load the embedding model and never call Mistral, so they run offline in seconds. They cover the validator (one read query only), the executor (read-only connection, time limit, row limit), template mode (each question shape gives the right answer; questions it only partly understands are refused), an end-to-end check that an injected `DROP TABLE` is refused while the data stays intact, the value lists and join tables, the Mistral client (pacing, retries, key errors) against a fake server, the evaluation's scoring and gold SQL, settings from `.env`, and the web page.
 
 GitHub Actions runs the same tests after every push, on Python 3.11 and 3.14 (see `.github/workflows/tests.yml`). The badge at the top shows the result for `main`.
 
