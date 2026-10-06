@@ -8,7 +8,10 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 
-from .config import DB_PATH
+from .config import DB_PATH, VALUE_LIST_MAX
+
+# Values longer than this are free text, not categories worth listing.
+_MAX_VALUE_LENGTH = 40
 
 
 @dataclass
@@ -17,6 +20,7 @@ class ColumnInfo:
     type: str
     is_pk: bool
     references: str | None  # "other_table.other_column" if a foreign key
+    values: list[str] | None = None  # every value, for a short text column
 
 
 @dataclass
@@ -29,13 +33,15 @@ class TableInfo:
         """
         A plain-English rendering of the table, used both as the text that
         gets embedded for retrieval and as the schema text shown to the LLM.
-        Sample rows matter: they tell the model what a 'status' column
-        actually contains ('shipped', not an integer code), which a bare
-        column list can't.
+        Sample rows show what a row looks like ('shipped', not an integer
+        code). A short text column also lists every value it holds, because
+        the model takes two sample rows as the whole list; and the values
+        help retrieval too, since a question names them ("UPI", "Monitor").
         """
         cols = ", ".join(
             f"{c.name} ({c.type}{', PK' if c.is_pk else ''}"
-            f"{', -> ' + c.references if c.references else ''})"
+            f"{', -> ' + c.references if c.references else ''}"
+            f"{', one of: ' + ', '.join(_sql_literal(v) for v in c.values) if c.values else ''})"
             for c in self.columns
         )
         lines = [f"Table {self.name}: {cols}"]
@@ -47,7 +53,28 @@ class TableInfo:
         return "\n".join(lines)
 
 
-def introspect(db_path=DB_PATH, sample_rows: int = 2) -> list[TableInfo]:
+def _sql_literal(value: str) -> str:
+    # 'upi', written the way the model should put it in a query
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _value_list(cur, table: str, column: ColumnInfo, max_values: int) -> list[str] | None:
+    """Every value of a text column that holds only a few short ones, like
+    a status or a payment method; None for anything else."""
+    # SQLite's own rule for a text column: CHAR, CLOB or TEXT in the type
+    text = any(k in column.type.upper() for k in ("CHAR", "CLOB", "TEXT"))
+    if max_values <= 0 or column.is_pk or column.references or not text:
+        return None
+    cur.execute(f'SELECT DISTINCT "{column.name}" FROM "{table}" '
+                f'WHERE "{column.name}" IS NOT NULL LIMIT {max_values + 1}')
+    values = [r[0] for r in cur.fetchall()]
+    if not values or len(values) > max_values or any(len(str(v)) > _MAX_VALUE_LENGTH for v in values):
+        return None
+    return sorted(values, key=str)
+
+
+def introspect(db_path=DB_PATH, sample_rows: int = 2,
+               max_values: int = VALUE_LIST_MAX) -> list[TableInfo]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -72,6 +99,8 @@ def introspect(db_path=DB_PATH, sample_rows: int = 2) -> list[TableInfo]:
             )
             for r in col_rows
         ]
+        for c in columns:
+            c.values = _value_list(cur, tname, c, max_values)
 
         cur.execute(f"SELECT * FROM '{tname}' LIMIT {sample_rows}")
         rows = [tuple(r) for r in cur.fetchall()]

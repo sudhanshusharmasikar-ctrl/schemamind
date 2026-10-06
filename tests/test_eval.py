@@ -106,6 +106,7 @@ def test_evaluate_counts_each_kind_of_outcome(db):
     assert m["unanswerable_refused"] == 1
     # customers and city need only `customers`; monitors and products need tables not offered
     assert m["gold_tables_in_prompt"] == 2
+    assert m["avg_tables"] == 3.0  # over the 6 questions that got an answer
     outcomes = {r["question"]: r["outcome"] for r in m["records"]}
     assert (outcomes["email"], outcomes["pune"], outcomes["products"]) == ("answered", "error", "failed")
 

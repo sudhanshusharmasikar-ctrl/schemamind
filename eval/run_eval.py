@@ -124,6 +124,7 @@ def evaluate(rows: list[dict], agent: Agent, use_full_schema: bool, mode: str,
                        sql=res.sql)
         if res is not None:
             rec["attempts"] = res.attempts
+            rec["tables"] = list(res.tables_used)
             if r["answerable"]:
                 rec["has_gold_tables"] = gold_tables(r["gold_sql"]) <= set(res.tables_used)
         records.append(rec)
@@ -138,6 +139,7 @@ def evaluate(rows: list[dict], agent: Agent, use_full_schema: bool, mode: str,
     ans = [x for x in records if x["answerable"]]
     unans = [x for x in records if not x["answerable"]]
     times = sorted(x["seconds"] for x in records if x["outcome"] != "error")
+    prompt_sizes = [len(x["tables"]) for x in records if "tables" in x]
 
     def count(group, outcome):
         return sum(x["outcome"] == outcome for x in group)
@@ -156,6 +158,8 @@ def evaluate(rows: list[dict], agent: Agent, use_full_schema: bool, mode: str,
         "unanswerable_refused": count(unans, "refused"),
         # did the prompt contain every table the gold SQL reads?
         "gold_tables_in_prompt": sum(bool(x.get("has_gold_tables")) for x in ans),
+        # the price of that recall: a prompt that holds more tables
+        "avg_tables": round(statistics.mean(prompt_sizes), 1) if prompt_sizes else None,
         "median_seconds": round(statistics.median(times), 2) if times else None,
         "p95_seconds": round(times[min(len(times) - 1, int(0.95 * len(times)))], 2) if times else None,
         "records": records,
@@ -173,6 +177,7 @@ def print_report(results: list[dict]) -> None:
         ("Correct only after a repair", lambda m: str(m["correct_after_repair"])),
         ("Unanswerable questions refused", lambda m: f"{m['unanswerable_refused']} of {u}"),
         ("Every needed table in the prompt", lambda m: f"{m['gold_tables_in_prompt']} of {n}"),
+        ("Tables in the prompt (average)", lambda m: str(m["avg_tables"])),
         ("Seconds per question (median / p95)", lambda m: f"{m['median_seconds']} / {m['p95_seconds']}"),
     ]
     print(f"\n{'':38}" + "".join(f"{m['schema'] + ' schema':>22}" for m in results))
@@ -185,6 +190,8 @@ def print_report(results: list[dict]) -> None:
         print(f"\nWhat went wrong with the {m['schema']} schema ({len(misses)}):")
         for x in misses:
             print(f"  [{x['outcome']}] {x['question']}")
+            if m["schema"] == "retrieved" and x.get("tables"):
+                print(f"      tables: {', '.join(x['tables'])}")
             if x.get("sql"):
                 print(f"      SQL: {' '.join(x['sql'].split())}")
             if x.get("error"):
