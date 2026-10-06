@@ -32,7 +32,11 @@ TOP_K_TABLES = int(os.getenv("SCHEMAMIND_TOP_K_TABLES", 3))
 #               schema. This is the real text-to-SQL mode.
 GEN_MODE = os.getenv("SCHEMAMIND_GEN_MODE", "template")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
-MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+# Codestral, Mistral's model for code, and SQL is code. It is also what the
+# README's numbers were measured with, on a free plan that refused every
+# request to mistral-small-latest as over the rate limit. The Limits page of
+# Mistral's admin console lists the models your plan allows.
+MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "codestral-2508")
 # Mistral's free plan limits how many requests you may send per second, so
 # calls are spaced at least this far apart. A "too many requests" reply (429)
 # or a temporary server error is retried, waiting longer each time.
