@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from .agent import Agent
 from .config import DB_PATH, GEN_MODE, TOP_K_TABLES
+from .sql_generate import LLMError
 
 _state: dict = {}
 
@@ -68,12 +69,15 @@ def health() -> dict:
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
     t0 = time.perf_counter()
-    r = _agent().ask(
-        req.question,
-        mode=req.mode,
-        use_full_schema=req.use_full_schema,
-        top_k=req.top_k_tables,
-    )
+    try:
+        r = _agent().ask(
+            req.question,
+            mode=req.mode,
+            use_full_schema=req.use_full_schema,
+            top_k=req.top_k_tables,
+        )
+    except LLMError as e:  # no key, a rejected key, or Mistral unreachable
+        raise HTTPException(502, str(e))
     return AskResponse(
         question=r.question,
         sql=r.sql,

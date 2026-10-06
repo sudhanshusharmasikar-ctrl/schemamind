@@ -1,0 +1,24 @@
+{"question": "How many customers are there?", "answerable": true, "gold_sql": "SELECT COUNT(*) FROM customers"}
+{"question": "How many orders have been delivered?", "answerable": true, "gold_sql": "SELECT COUNT(*) FROM orders WHERE status = 'delivered'"}
+{"question": "Which city has the most customers?", "answerable": true, "gold_sql": "SELECT city FROM customers GROUP BY city ORDER BY COUNT(*) DESC LIMIT 1"}
+{"question": "What is the most expensive product?", "answerable": true, "gold_sql": "SELECT name FROM products ORDER BY price DESC LIMIT 1"}
+{"question": "How many orders were placed in 2026?", "answerable": true, "gold_sql": "SELECT COUNT(*) FROM orders WHERE order_date LIKE '2026-%'"}
+{"question": "How many orders were paid cash on delivery?", "answerable": true, "gold_sql": "SELECT COUNT(*) FROM payments WHERE method = 'cod'"}
+{"question": "What is the total amount paid by UPI?", "answerable": true, "gold_sql": "SELECT SUM(amount) FROM payments WHERE method = 'upi'"}
+{"question": "What is the average payment amount?", "answerable": true, "gold_sql": "SELECT AVG(amount) FROM payments"}
+{"question": "How many orders came from customers in Pune?", "answerable": true, "gold_sql": "SELECT COUNT(*) FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE c.city = 'Pune'"}
+{"question": "How many orders has Customer 7 placed?", "answerable": true, "gold_sql": "SELECT COUNT(*) FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE c.name = 'Customer 7'"}
+{"question": "What is the total amount paid for delivered orders?", "answerable": true, "gold_sql": "SELECT SUM(p.amount) FROM payments p JOIN orders o ON o.order_id = p.order_id WHERE o.status = 'delivered'"}
+{"question": "Which customers have never placed an order?", "answerable": true, "gold_sql": "SELECT name FROM customers WHERE customer_id NOT IN (SELECT customer_id FROM orders)"}
+{"question": "Which product has been ordered in the largest total quantity?", "answerable": true, "gold_sql": "SELECT p.name FROM order_items oi JOIN products p ON p.product_id = oi.product_id GROUP BY p.product_id ORDER BY SUM(oi.quantity) DESC LIMIT 1"}
+{"question": "How many orders include at least one Laptop?", "answerable": true, "gold_sql": "SELECT COUNT(DISTINCT oi.order_id) FROM order_items oi JOIN products p ON p.product_id = oi.product_id WHERE p.name = 'Laptop'"}
+{"question": "Who are the top 3 customers by total amount paid?", "answerable": true, "gold_sql": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.customer_id JOIN payments p ON p.order_id = o.order_id GROUP BY c.customer_id ORDER BY SUM(p.amount) DESC LIMIT 3"}
+{"question": "What is the total amount paid by customers in each city?", "answerable": true, "gold_sql": "SELECT c.city, SUM(p.amount) FROM customers c JOIN orders o ON o.customer_id = c.customer_id JOIN payments p ON p.order_id = o.order_id GROUP BY c.city"}
+{"question": "What is the total value of Electronics items in orders that were not cancelled?", "answerable": true, "gold_sql": "SELECT SUM(oi.quantity * oi.unit_price) FROM order_items oi JOIN products p ON p.product_id = oi.product_id JOIN orders o ON o.order_id = oi.order_id WHERE p.category = 'Electronics' AND o.status != 'cancelled'"}
+{"question": "How many delivered orders included a Monitor?", "answerable": true, "gold_sql": "SELECT COUNT(DISTINCT o.order_id) FROM orders o JOIN order_items oi ON oi.order_id = o.order_id JOIN products p ON p.product_id = oi.product_id WHERE p.name = 'Monitor' AND o.status = 'delivered'"}
+{"question": "Counting only orders that were not cancelled, which city's customers bought the most Backpacks?", "answerable": true, "gold_sql": "SELECT c.city FROM customers c JOIN orders o ON o.customer_id = c.customer_id JOIN order_items oi ON oi.order_id = o.order_id JOIN products p ON p.product_id = oi.product_id WHERE p.name = 'Backpack' AND o.status != 'cancelled' GROUP BY c.city ORDER BY SUM(oi.quantity) DESC LIMIT 1"}
+{"question": "How many Laptops were bought by customers in Indore, in orders that were not cancelled?", "answerable": true, "gold_sql": "SELECT SUM(oi.quantity) FROM customers c JOIN orders o ON o.customer_id = c.customer_id JOIN order_items oi ON oi.order_id = o.order_id JOIN products p ON p.product_id = oi.product_id WHERE p.name = 'Laptop' AND c.city = 'Indore' AND o.status != 'cancelled'"}
+{"question": "What is the email address of Customer 12?", "answerable": false}
+{"question": "How many employees does the shop have?", "answerable": false}
+{"question": "How much profit did the shop make on Laptops?", "answerable": false}
+{"question": "Which products are out of stock right now?", "answerable": false}

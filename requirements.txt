@@ -6,3 +6,4 @@ numpy==2.4.6
 sqlglot==30.21.0
 streamlit==1.64.0
 requests==2.34.2
+python-dotenv==1.2.4
