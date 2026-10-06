@@ -4,7 +4,7 @@
 
 A text-to-SQL agent that answers plain-English questions against a database, retrieves only the tables relevant to the question instead of dumping the whole schema into the prompt, and refuses to run anything that isn't a read.
 
-> **Status: core pipeline built and tested; evaluation ready to run.** Schema introspection, retrieval, validation and execution all run correctly against the included sample database (verified below). The evaluation (24 hand-written questions, retrieved schema vs full schema) is written and tested; its numbers come from a run with a free Mistral API key — see Evaluation.
+> **Status: built, tested and evaluated.** Schema introspection, retrieval, validation and execution all run correctly against the included sample database (verified below). On 24 hand-written questions, Mistral's Codestral answered 17 of 20 correctly with the full schema and 14 of 20 with retrieved tables, and refused all 4 questions the database can't answer when using retrieval. Evaluation explains every miss.
 
 ---
 
@@ -99,8 +99,8 @@ The whole question has to match a shape. A question with words left over, like *
 | The evaluation scores answers correctly, and every gold query is safe, runs and returns rows | Tested (`tests/test_eval.py`) |
 | Settings load from `.env`; a variable set in the shell wins | Tested (`tests/test_config.py`) |
 | The web page starts in the server's generation mode and shows why a request failed | Tested (`tests/test_ui.py`) |
-| Real LLM (mistral mode) text-to-SQL accuracy | Script and questions ready; needs a run with your key |
-| Retrieved-schema vs full-schema accuracy comparison | Script and questions ready; needs a run with your key |
+| Real LLM (mistral mode) text-to-SQL accuracy | Measured: 17 of 20 with the full schema, 14 of 20 with retrieval (see Evaluation) |
+| Retrieved-schema vs full-schema accuracy comparison | Measured, with every miss explained (see Evaluation) |
 
 ## Planned features
 
@@ -114,7 +114,8 @@ The whole question has to match a shape. A question with words left over, like *
 - [x] FastAPI backend
 - [x] Streamlit UI
 - [x] Hand-written eval set with gold SQL
-- [ ] Retrieved-vs-full-schema accuracy benchmark (script ready, needs a run with a Mistral key)
+- [x] Retrieved-vs-full-schema accuracy benchmark
+- [ ] Distinct values of short text columns in the prompt, and foreign-key expansion of retrieved tables (the two causes the benchmark found)
 - [ ] Support for a second SQL dialect
 
 ## Stack
@@ -163,18 +164,36 @@ Mistral's free plan limits how many requests you can send per second. The client
 
 ### Results
 
-To be filled in from that run:
+Measured on 6 October 2026 with `codestral-2508`, Mistral's model for code, on the free plan (on that plan every request to `mistral-small-latest` was refused as over the rate limit): temperature 0, the 3 most relevant tables retrieved, at most 2 repairs.
 
 | Metric | Retrieved schema | Full schema |
 |---|---|---|
-| Correct answers (of 20) | — | — |
-| Ran, but returned the wrong rows | — | — |
-| Failed to run | — | — |
-| Unanswerable questions refused (of 4) | — | — |
-| Every needed table in the prompt (of 20) | — | 20 |
-| Seconds per question (median) | — | — |
+| Correct answers (of 20) | 14 (70%) | 17 (85%) |
+| Ran, but returned the wrong rows | 3 | 0 |
+| Failed to run | 0 | 0 |
+| Answerable, but refused | 3 | 3 |
+| Unanswerable questions refused (of 4) | 4 | 3 |
+| Every needed table in the prompt (of 20) | 15 | 20 |
+| Seconds per question (median / p95) | 1.11 / 1.54 | 1.13 / 1.64 |
 
-On a 5-table database, expect these to be close, possibly with full schema slightly ahead — that would be the honest finding. The technique is what's being demonstrated; it's built for warehouses with hundreds of tables, where dumping the full schema stops being possible at all.
+On a 5-table database the full schema wins, as expected: retrieval is built for warehouses with hundreds of tables, where the full schema doesn't fit in a prompt at all. The seconds are mostly the 1.1-second spacing between requests (`SCHEMAMIND_LLM_MIN_INTERVAL`); Codestral itself usually answered sooner.
+
+Every miss was checked against the database. Two patterns explain most of them.
+
+**When retrieval leaves out a table, the model guesses instead of refusing.** This is the silent wrongness described at the top, now measured:
+
+- *How many delivered orders included a Monitor?* The query never touches `products`, the table that maps names to ids. It filters on `product_id = 5`, an id from the sample rows of `order_items`, and product 5 is the Mouse: 14 instead of 17.
+- *How many Laptops were bought by customers in Indore, in orders that were not cancelled?* The query drops the Laptop condition and counts every order from Indore that wasn't cancelled: 23 instead of 14. This question and the Backpack one need 4 tables, so with 3 retrieved, retrieval can never offer them everything.
+
+**The model reads the two sample rows as the full list of values.** The prompt shows two sample rows per table: payment methods `card` and `cod`, products `Laptop` and `Headphones`. All three answerable questions refused with the full schema ask about a value missing from those rows: UPI (the most common method, 69 of 126 payments) and the Backpack, refused with both schemas, and the Monitor.
+
+The other misses:
+
+- *What is the total value of Electronics items in orders that were not cancelled?* (retrieved schema) Refused, though it was answered correctly with the full schema, so most likely a table it needs wasn't retrieved. Refusing is the right reaction to a missing table; the Monitor and Laptop questions above didn't get it.
+- *Who are the top 3 customers by total amount paid?* (retrieved schema) It returned customer ids 7, 26 and 15 with their totals: the right customers in the right order, but ids where the question asks who. The scoring rule counts it as wrong; counted as right, retrieval would score 15 of 20.
+- *How much profit did the shop make on Laptops?* (full schema) The database records no costs, so the right answer is to refuse. The model treated the list price as a cost and reported a profit of 0.
+
+Next, two fixes measured on the same 24 questions: show the distinct values of short text columns (status, payment method, category, product name, city) instead of relying on two sample rows, and add the tables a retrieved table's foreign keys point to, so that `order_items` brings `products` and `orders` with it.
 
 ## Known limitations
 
