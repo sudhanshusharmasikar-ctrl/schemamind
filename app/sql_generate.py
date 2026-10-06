@@ -53,6 +53,17 @@ class LLMAuthError(LLMError):
 _last_call = 0.0  # time.monotonic() when the last request was sent
 
 
+def _reason(resp) -> str:
+    """Mistral's own explanation in an error reply. A 429 alone doesn't say
+    whether you sent too fast, used up a limit, or the model is full."""
+    try:
+        body = resp.json()
+        message = body.get("message") or body.get("detail") or body
+    except (ValueError, AttributeError):
+        message = resp.text
+    return " ".join(str(message).split())[:200] or "no details"
+
+
 def _post(payload: dict) -> dict:
     """POST to Mistral, keeping requests LLM_MIN_INTERVAL apart and retrying a
     rate limit (429), a server error (5xx) or a dropped connection with a
@@ -79,13 +90,13 @@ def _post(payload: dict) -> dict:
             problem = f"could not reach Mistral ({e.__class__.__name__})"
         else:
             if resp.status_code in (401, 403):
-                raise LLMAuthError(f"Mistral rejected the API key ({resp.status_code}). "
+                raise LLMAuthError(f"Mistral rejected the API key ({resp.status_code}: {_reason(resp)}). "
                                    "Check MISTRAL_API_KEY in .env.")
             if resp.status_code == 429 or resp.status_code >= 500:
-                problem = f"Mistral answered {resp.status_code}"
+                problem = f"Mistral answered {resp.status_code} ({_reason(resp)})"
                 retry_after = resp.headers.get("Retry-After", "")
             elif resp.status_code >= 400:  # a mistake in the request: retrying won't help
-                raise LLMError(f"Mistral refused the request ({resp.status_code}): {resp.text[:200]}")
+                raise LLMError(f"Mistral refused the request ({resp.status_code}): {_reason(resp)}")
             else:
                 return resp.json()
         if attempt < LLM_RETRIES:

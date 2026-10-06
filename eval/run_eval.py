@@ -34,6 +34,9 @@ from app.sql_generate import LLMAuthError, LLMError
 from app.validate import validate
 
 QUESTIONS = Path(__file__).parent / "questions.jsonl"
+# When Mistral gives no answer to this many questions in a row, something is
+# wrong for every question (a used-up limit, a full model): stop and say why.
+STOP_AFTER_NO_REPLY = 3
 
 
 def load_questions() -> list[dict]:
@@ -95,6 +98,7 @@ def evaluate(rows: list[dict], agent: Agent, use_full_schema: bool, mode: str,
              progress: bool = False) -> dict:
     """Ask every question once; return the counts and what happened to each."""
     records = []
+    no_reply_in_a_row = 0
     for r in rows:
         start = time.perf_counter()
         try:
@@ -126,6 +130,10 @@ def evaluate(rows: list[dict], agent: Agent, use_full_schema: bool, mode: str,
         if progress:
             print({"correct": ".", "refused": "r", "answered": "a"}.get(rec["outcome"], "x"),
                   end="", flush=True)
+        no_reply_in_a_row = no_reply_in_a_row + 1 if res is None else 0
+        if no_reply_in_a_row == STOP_AFTER_NO_REPLY:
+            raise LLMError(f"Mistral gave no answer to {STOP_AFTER_NO_REPLY} questions in a row, "
+                           f"so the results would mean nothing. The last error: {error}")
 
     ans = [x for x in records if x["answerable"]]
     unans = [x for x in records if not x["answerable"]]
@@ -141,7 +149,8 @@ def evaluate(rows: list[dict], agent: Agent, use_full_schema: bool, mode: str,
         "correct": count(ans, "correct"),
         "execution_accuracy_pct": round(count(ans, "correct") / max(len(ans), 1) * 100, 1),
         "wrong_rows": count(ans, "wrong_rows"),
-        "failed_to_run": count(ans, "failed") + count(ans, "error"),
+        "failed_to_run": count(ans, "failed"),
+        "no_reply": count(records, "error"),
         "refused_answerable": count(ans, "refused"),
         "correct_after_repair": sum(x["outcome"] == "correct" and x.get("attempts", 1) > 1 for x in ans),
         "unanswerable_refused": count(unans, "refused"),
@@ -159,6 +168,7 @@ def print_report(results: list[dict]) -> None:
         ("Correct answers (execution accuracy)", lambda m: f"{m['correct']} of {n} ({m['execution_accuracy_pct']}%)"),
         ("Ran, but returned the wrong rows", lambda m: str(m["wrong_rows"])),
         ("Failed to run after all repairs", lambda m: str(m["failed_to_run"])),
+        ("No answer from Mistral", lambda m: str(m["no_reply"])),
         ("Answerable, but refused", lambda m: str(m["refused_answerable"])),
         ("Correct only after a repair", lambda m: str(m["correct_after_repair"])),
         ("Unanswerable questions refused", lambda m: f"{m['unanswerable_refused']} of {u}"),
@@ -179,6 +189,22 @@ def print_report(results: list[dict]) -> None:
                 print(f"      SQL: {' '.join(x['sql'].split())}")
             if x.get("error"):
                 print(f"      error: {x['error'][:200]}")
+
+
+def resume_line(results: list[dict]) -> str:
+    """The line for your resume, unless Mistral left questions unanswered."""
+    r, f = results
+    no_reply = r["no_reply"] + f["no_reply"]
+    if no_reply:
+        return (f"{no_reply} questions got no answer from Mistral (see above), so these numbers "
+                "are incomplete. Run the evaluation again before using them.")
+    return (
+        "Resume line:\n"
+        f"  on a hand-written set of {r['n_answerable'] + r['n_unanswerable']} questions, "
+        f"SchemaMind answered {r['correct']} of {r['n_answerable']} correctly with retrieved "
+        f"tables ({f['correct']} with the full schema) and refused {r['unanswerable_refused']} "
+        f"of {r['n_unanswerable']} questions the database can't answer"
+    )
 
 
 def main() -> None:
@@ -205,18 +231,11 @@ def main() -> None:
             print(f"  {'full' if full else 'retrieved':>9} schema: ", end="", flush=True)
             results.append(evaluate(rows, agent, use_full_schema=full, mode=args.mode, progress=True))
             print()
-    except LLMAuthError as e:
+    except LLMError as e:  # a rejected key, or Mistral failing every question
         raise SystemExit(f"\n{e}")
 
     print_report(results)
-    r, f = results
-    print(
-        "\nResume line:\n"
-        f"  on a hand-written set of {r['n_answerable'] + r['n_unanswerable']} questions, "
-        f"SchemaMind answered {r['correct']} of {r['n_answerable']} correctly with retrieved "
-        f"tables ({f['correct']} with the full schema) and refused {r['unanswerable_refused']} "
-        f"of {r['n_unanswerable']} questions the database can't answer"
-    )
+    print("\n" + resume_line(results))
 
 
 if __name__ == "__main__":
