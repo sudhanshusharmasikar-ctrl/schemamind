@@ -4,7 +4,7 @@
 
 A text-to-SQL agent that answers plain-English questions against a database, retrieves only the tables relevant to the question instead of dumping the whole schema into the prompt, and refuses to run anything that isn't a read.
 
-> **Status: built, tested and evaluated.** Schema introspection, retrieval, validation and execution all run correctly against the included sample database (verified below). On 24 hand-written questions, Mistral's Codestral answered 17 of 20 correctly with the full schema and 14 of 20 with retrieved tables, and refused all 4 questions the database can't answer when using retrieval. Evaluation explains every miss.
+> **Status: built, tested and evaluated.** Schema introspection, retrieval, validation and execution all run correctly against the included sample database (verified below). On 24 hand-written questions, Mistral's Codestral answers 19 of 20 correctly with retrieved tables, up from 14 before two fixes the evaluation pointed to, and 18 of 20 with the full schema. Evaluation explains every miss.
 
 ---
 
@@ -106,8 +106,8 @@ The whole question has to match a shape. A question with words left over, like *
 | The evaluation scores answers correctly, and every gold query is safe, runs and returns rows | Tested (`tests/test_eval.py`) |
 | Settings load from `.env`; a variable set in the shell wins | Tested (`tests/test_config.py`) |
 | The web page starts in the server's generation mode and shows why a request failed | Tested (`tests/test_ui.py`) |
-| Real LLM (mistral mode) text-to-SQL accuracy | Measured: 17 of 20 with the full schema, 14 of 20 with retrieval (see Evaluation) |
-| Retrieved-schema vs full-schema accuracy comparison | Measured, with every miss explained (see Evaluation) |
+| Real LLM (mistral mode) text-to-SQL accuracy | Measured: 19 of 20 with retrieval, 18 of 20 with the full schema (see Evaluation) |
+| Retrieved-schema vs full-schema accuracy comparison | Measured before and after two fixes, with every miss explained (see Evaluation) |
 
 ## Planned features
 
@@ -123,7 +123,8 @@ The whole question has to match a shape. A question with words left over, like *
 - [x] Hand-written eval set with gold SQL
 - [x] Retrieved-vs-full-schema accuracy benchmark
 - [x] Value lists for short text columns, and join tables for retrieval (fixes for the two causes the benchmark found)
-- [ ] Re-run the benchmark with those fixes
+- [x] Re-run the benchmark with those fixes: 14 to 19 of 20 correct with retrieval
+- [ ] Tell the model what `quantity` means and that the shop records no costs (the remaining misses)
 - [ ] Support for a second SQL dialect
 
 ## Stack
@@ -173,38 +174,39 @@ Mistral's free plan limits how many requests you can send per second. The client
 
 ### Results
 
-These numbers come from before the two fixes at the end of this section, which are now in place; the numbers after them come from the next run.
+Measured on 6 October 2026 with `codestral-2508`, Mistral's model for code, on the free plan (on that plan every request to `mistral-small-latest` was refused as over the rate limit): temperature 0, the 3 most relevant tables retrieved, at most 2 repairs. *Before* is the first run; *after* adds the two fixes that run pointed to, the value lists and join tables described under Schema retrieval.
 
-Measured on 6 October 2026 with `codestral-2508`, Mistral's model for code, on the free plan (on that plan every request to `mistral-small-latest` was refused as over the rate limit): temperature 0, the 3 most relevant tables retrieved, at most 2 repairs.
+| Metric | Retrieved, before | Retrieved, after | Full schema, before | Full schema, after |
+|---|---|---|---|---|
+| Correct answers (of 20) | 14 (70%) | **19 (95%)** | 17 (85%) | 18 (90%) |
+| Ran, but returned the wrong rows | 3 | 1 | 0 | 2 |
+| Failed to run | 0 | 0 | 0 | 0 |
+| Answerable, but refused | 3 | 0 | 3 | 0 |
+| Unanswerable questions refused (of 4) | 4 | 3 | 3 | 3 |
+| Every needed table in the prompt (of 20) | 15 | 20 | 20 | 20 |
+| Tables in the prompt (average) | 3 | 4.2 | 5 | 5 |
+| Seconds per question (median / p95) | 1.11 / 1.54 | 1.13 / 1.74 | 1.13 / 1.64 | 1.19 / 1.96 |
 
-| Metric | Retrieved schema | Full schema |
-|---|---|---|
-| Correct answers (of 20) | 14 (70%) | 17 (85%) |
-| Ran, but returned the wrong rows | 3 | 0 |
-| Failed to run | 0 | 0 |
-| Answerable, but refused | 3 | 3 |
-| Unanswerable questions refused (of 4) | 4 | 3 |
-| Every needed table in the prompt (of 20) | 15 | 20 |
-| Seconds per question (median / p95) | 1.11 / 1.54 | 1.13 / 1.64 |
+The seconds are mostly the 1.1-second spacing between requests (`SCHEMAMIND_LLM_MIN_INTERVAL`); Codestral itself usually answered sooner. Every miss in both runs was checked against the database.
 
-On a 5-table database the full schema wins, as expected: retrieval is built for warehouses with hundreds of tables, where the full schema doesn't fit in a prompt at all. The seconds are mostly the 1.1-second spacing between requests (`SCHEMAMIND_LLM_MIN_INTERVAL`); Codestral itself usually answered sooner.
+**Before: two causes behind most misses.**
 
-Every miss was checked against the database. Two patterns explain most of them.
+- *When retrieval left out a table, the model guessed instead of refusing.* For *How many delivered orders included a Monitor?* the query never touched `products`, the table that maps names to ids, and filtered on `product_id = 5`, an id from the sample rows of `order_items`. Product 5 is the Mouse: 14 instead of 17. *How many Laptops were bought by customers in Indore, in orders that were not cancelled?* needs 4 tables, one more than the 3 retrieved, and its query lost the Laptop condition: 23 instead of 14.
+- *The model read the two sample rows as the full list of a column's values.* They show payment methods `card` and `cod`, so it refused to total the UPI payments, though UPI is the most common method (69 of 126 payments). Questions about the Monitor and the Backpack, which aren't in the products' sample rows, were refused the same way.
 
-**When retrieval leaves out a table, the model guesses instead of refusing.** This is the silent wrongness described at the top, now measured:
+The other misses: retrieval refused the Electronics question, most likely for lack of a table; it named the top 3 customers by id instead of name (the right customers, but the scoring rule counts it as wrong); and with the full schema the model invented a profit (below).
 
-- *How many delivered orders included a Monitor?* The query never touches `products`, the table that maps names to ids. It filters on `product_id = 5`, an id from the sample rows of `order_items`, and product 5 is the Mouse: 14 instead of 17.
-- *How many Laptops were bought by customers in Indore, in orders that were not cancelled?* The query drops the Laptop condition and counts every order from Indore that wasn't cancelled: 23 instead of 14. This question and the Backpack one need 4 tables, so with 3 retrieved, retrieval can never offer them everything.
+**After: what the two fixes changed.**
 
-**The model reads the two sample rows as the full list of values.** The prompt shows two sample rows per table: payment methods `card` and `cod`, products `Laptop` and `Headphones`. All three answerable questions refused with the full schema ask about a value missing from those rows: UPI (the most common method, 69 of 126 payments) and the Backpack, refused with both schemas, and the Monitor.
+- Listing the values of short text columns removed every refusal of an answerable question: 3 to 0 with both schemas.
+- Join tables gave retrieval every table it needed for all 20 questions, up from 15, with 4.2 tables in an average prompt instead of all 5. Retrieval went from 14 to 19 correct and now matches the full schema: 19 against 18 is a difference of one question, too small to call a win on 20 questions.
 
-The other misses:
+**After: what still goes wrong.**
 
-- *What is the total value of Electronics items in orders that were not cancelled?* (retrieved schema) Refused, though it was answered correctly with the full schema, so most likely a table it needs wasn't retrieved. Refusing is the right reaction to a missing table; the Monitor and Laptop questions above didn't get it.
-- *Who are the top 3 customers by total amount paid?* (retrieved schema) It returned customer ids 7, 26 and 15 with their totals: the right customers in the right order, but ids where the question asks who. The scoring rule counts it as wrong; counted as right, retrieval would score 15 of 20.
-- *How much profit did the shop make on Laptops?* (full schema) The database records no costs, so the right answer is to refuse. The model treated the list price as a cost and reported a profit of 0.
+- *Counting order lines instead of items*, behind all three wrong answers. For *Counting only orders that were not cancelled, which city's customers bought the most Backpacks?* both schemas counted order lines: Indore has the most lines (8), but Pune bought the most Backpacks (14 against Indore's 13). With the full schema, the Indore Laptop question counted 6 lines instead of 14 Laptops.
+- *Inventing a profit.* The database records no costs, yet with both schemas the model computed a profit as the selling price minus the list price, which are equal everywhere in this data, and reported 0. With retrieval it refused this question before the fixes; now its prompt holds `order_items` and `products`, and it doesn't.
 
-The two fixes, to be measured on the same 24 questions: list every value of a short text column (status, payment method, category, product name, city) instead of relying on two sample rows, and add the tables needed to read and join the retrieved ones, so that `order_items` brings `products` and `orders` with it (see Schema retrieval above).
+Next: tell the model what `quantity` means (the number of items in an order line) and that the shop records no costs, then measure again.
 
 ## Known limitations
 
