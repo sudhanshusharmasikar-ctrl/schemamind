@@ -138,7 +138,8 @@ The report has one column per schema:
 |---|---|
 | Correct answers | execution accuracy over the 20 answerable questions |
 | Ran, but returned the wrong rows | the dangerous kind: a valid query that answers a different question |
-| Failed to run after all repairs | SQL that still failed after the repair loop, or Mistral unreachable |
+| Failed to run after all repairs | SQL that still failed after the repair loop |
+| No answer from Mistral | Mistral still refused after every retry; the error gives Mistral's own reason |
 | Answerable, but refused | the model replied `CANNOT_ANSWER` to a question it could answer |
 | Correct only after a repair | the repair loop turned a failing query into a right one |
 | Unanswerable questions refused | out of the 4 |
@@ -158,7 +159,7 @@ python -m eval.run_eval                   # the evaluation, with Mistral
 
 The dry run only shows that everything works end to end: template mode knows a few fixed question shapes, so it answers 1 of the 20 and refuses the rest. The real run sends about 50 requests and takes a couple of minutes.
 
-Mistral's free plan limits how many requests you can send per second. The client sends at most one request every 1.1 seconds (`SCHEMAMIND_LLM_MIN_INTERVAL`) and retries a rate-limit reply (429), a server error or a dropped connection up to 4 times (`SCHEMAMIND_LLM_RETRIES`), waiting 1, 2, 4 and 8 seconds, or as long as the server's `Retry-After` header asks. A missing or rejected key stops the run at once with a message saying so, instead of failing all 48 requests one by one. `tests/test_mistral_client.py` checks all of this with a fake server and a fake clock, so the tests send nothing and never wait.
+Mistral's free plan limits how many requests you can send per second. The client sends at most one request every 1.1 seconds (`SCHEMAMIND_LLM_MIN_INTERVAL`) and retries a rate-limit reply (429), a server error or a dropped connection up to 4 times (`SCHEMAMIND_LLM_RETRIES`), waiting 1, 2, 4 and 8 seconds, or as long as the server's `Retry-After` header asks. A missing or rejected key stops the run at once with a message saying so, instead of failing all 48 requests one by one. So does Mistral giving no answer to 3 questions in a row: a 429 that outlasts every retry isn't the per-second limit but something that fails every question, such as a used-up limit or a model with no free capacity left, and the message quotes Mistral's reason. The Limits page of Mistral's admin console shows your plan's limits. A run in which any question got no answer prints no resume line. `tests/test_mistral_client.py` checks the client with a fake server and a fake clock, so the tests send nothing and never wait, and `tests/test_eval.py` checks the early stop.
 
 ### Results
 

@@ -4,6 +4,7 @@ their own (a rate limit, a server error, a dropped connection), but stops at
 once on a missing or rejected key. Time and the server are fakes here: no
 request leaves the machine and no test waits.
 """
+import json
 import types
 
 import pytest
@@ -14,11 +15,22 @@ from app.config import LLM_MIN_INTERVAL, LLM_RETRIES
 
 
 class Reply:
-    def __init__(self, status=200, content="SELECT 1", headers=None):
-        self.status_code, self.text, self.headers = status, content, headers or {}
+    """The SQL on success; otherwise Mistral's error, as JSON unless as_json=False."""
+
+    def __init__(self, status=200, content=None, headers=None, as_json=True):
+        self.status_code, self.headers, self.as_json = status, headers or {}, as_json
+        if content is None:
+            content = "SELECT 1" if status == 200 else f"error {status}"
+        if status == 200:
+            self.body = {"choices": [{"message": {"content": content}}]}
+        else:
+            self.body = {"object": "error", "message": content, "type": "error", "code": str(status)}
+        self.text = json.dumps(self.body) if as_json else content
 
     def json(self):
-        return {"choices": [{"message": {"content": self.text}}]}
+        if not self.as_json:
+            raise ValueError("not JSON")
+        return self.body
 
 
 @pytest.fixture
@@ -79,6 +91,19 @@ def test_it_gives_up_after_the_last_try(server):
     with pytest.raises(gen.LLMError, match=f"still failing after {LLM_RETRIES + 1} tries"):
         gen._mistral_generate("q", "schema")
     assert len(server.calls) == LLM_RETRIES + 1
+
+
+def test_the_error_says_what_mistral_said(server):
+    # every try refused: the 429 alone wouldn't say why
+    server.replies = [Reply(429, content="Service tier capacity exceeded for this model.")] * (LLM_RETRIES + 1)
+    with pytest.raises(gen.LLMError, match=r"429 \(Service tier capacity exceeded for this model\.\)"):
+        gen._mistral_generate("q", "schema")
+
+
+def test_an_error_page_that_is_not_json_still_gives_a_reason(server):
+    server.replies = [Reply(502, content="<html> Bad gateway </html>", as_json=False)] * (LLM_RETRIES + 1)
+    with pytest.raises(gen.LLMError, match=r"502 \(<html> Bad gateway </html>\)"):
+        gen._mistral_generate("q", "schema")
 
 
 def test_a_rejected_key_stops_at_once(server):
